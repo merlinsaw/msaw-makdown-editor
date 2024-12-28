@@ -1,0 +1,3 @@
+[submodule "AI_Prompts"]
+	path = AI_Prompts
+	url = https://github.com/merlinsaw/AI_Prompts.git
