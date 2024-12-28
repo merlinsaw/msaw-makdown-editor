@@ -1,0 +1,64 @@
+# Project specific
+fonts/External/IBM_Plex_Mono/*
+fonts/External/JetBrainsMono-2.304/*
+test.prompt
+
+# Important: Do NOT ignore these build-related files:
+# - requirements.txt
+# - setup.py
+# - setup.cfg
+# - pyproject.toml
+# - MANIFEST.in
+# - README.md
+# - LICENSE
+# - environment.yml
+
+# Build and distribution
+build/*
+dist/
+*.spec
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.manifest
+*.exe
+*.app
+
+# Environment and IDE
+.env
+.venv/
+env/
+venv/
+ENV/
+.idea/
+.vscode/
+*.swp
+
+# Windows specific
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Temporary files
+*.bak
+*.tmp
+*~
+
+# Logs and databases
+*.log
+*.sqlite
+*.db
+
+# Coverage and testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# Custom ignores
+test.md
+
