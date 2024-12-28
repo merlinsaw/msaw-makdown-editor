@@ -1,4 +1,5 @@
 # Project specific
+projects.json
 fonts/External/IBM_Plex_Mono/*
 fonts/External/JetBrainsMono-2.304/*
 test.prompt
