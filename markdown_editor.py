@@ -19,6 +19,7 @@ from PyQt5.QtCore import (
 from PyQt5.QtGui import QFont, QPalette, QColor, QKeySequence
 from PyQt5.QtWebChannel import QWebChannel
 import markdown2
+import re
 
 class ColorTheme(Enum):
     # Backgrounds
@@ -194,46 +195,52 @@ class MultiProjectModel(QAbstractItemModel):
         self.file_model.setFilter(QDir.AllEntries | QDir.NoDotAndDotDot)
         self.file_model.setNameFilters(['*.md', '*.markdown', '*.prompt'])
         self.file_model.setNameFilterDisables(False)
-        self.file_indices: Dict[str, QModelIndex] = {}
-
-    def load_projects(self, projects: List[Dict[str, str]]) -> None:
-        """Load projects from projects.json"""
-        self.beginResetModel()
-        self.root_paths = []
-        self.root_names = {}
-        self.file_indices = {}
-        for project in projects:
-            if os.path.exists(project['path']):
-                path = os.path.normpath(project['path'])
-                self.root_paths.append(path)
-                self.root_names[path] = project['name']
-                self.file_indices[path] = self.file_model.setRootPath(path)
-        self.endResetModel()
-
+        
     def index(self, row: int, column: int, parent: QModelIndex = QModelIndex()) -> QModelIndex:
+        """Improved index handling for better file display"""
         if not self.hasIndex(row, column, parent):
             return QModelIndex()
 
-        if not parent.isValid():  # Root level - projects
+        if not parent.isValid():  # Root level
             if 0 <= row < len(self.root_paths):
                 return self.createIndex(row, column, self.root_paths[row])
             return QModelIndex()
-        
-        # Child items - use QFileSystemModel
+
         parent_path = str(parent.internalPointer() or '')
-        if not parent_path or parent_path not in self.file_indices:
+        if not parent_path:
             return QModelIndex()
-            
-        # Get the file model index for this path
-        file_parent = self.file_indices[parent_path]
-        # Get child index from file model
-        file_index = self.file_model.index(row, column, file_parent)
-        if file_index.isValid():
-            file_path = self.file_model.filePath(file_index)
-            return self.createIndex(row, column, file_path)
-        return QModelIndex()
+
+        # Get the file system model's index for the parent path
+        parent_model_index = self.file_model.index(parent_path)
+        if not parent_model_index.isValid():
+            return QModelIndex()
+
+        # Get the child from the file system model
+        child_index = self.file_model.index(row, 0, parent_model_index)
+        if not child_index.isValid():
+            return QModelIndex()
+
+        # Get the full path of the child
+        child_path = self.file_model.filePath(child_index)
+        return self.createIndex(row, column, child_path)
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        """Improved row count handling"""
+        if not parent.isValid():
+            return len(self.root_paths)
+
+        path = str(parent.internalPointer() or '')
+        if not path:
+            return 0
+
+        # Get count from file system model
+        model_index = self.file_model.index(path)
+        if model_index.isValid():
+            return self.file_model.rowCount(model_index)
+        return 0
 
     def parent(self, index: QModelIndex) -> QModelIndex:
+        """Improved parent handling"""
         if not index.isValid():
             return QModelIndex()
 
@@ -245,43 +252,22 @@ class MultiProjectModel(QAbstractItemModel):
         if parent_path in self.root_paths:
             row = self.root_paths.index(parent_path)
             return self.createIndex(row, 0, parent_path)
-        
-        # Find the parent in the file model
-        for root_path in self.root_paths:
-            if parent_path.startswith(root_path):
-                parent_index = self.file_model.index(parent_path)
-                if parent_index.isValid():
-                    row = parent_index.row()
-                    return self.createIndex(row, 0, parent_path)
-        return QModelIndex()
 
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        if not parent.isValid():  # Root level
-            return len(self.root_paths)
-        
-        parent_path = str(parent.internalPointer() or '')
-        if not parent_path:
-            return 0
-            
-        if parent_path in self.root_paths:
-            # Get row count from file model for this root path
-            root_index = self.file_indices[parent_path]
-            return self.file_model.rowCount(root_index)
-        else:
-            # Get row count for subdirectories
-            file_index = self.file_model.index(parent_path)
-            if file_index.isValid():
-                return self.file_model.rowCount(file_index)
-        return 0
+        # Get parent from file system model
+        parent_model_index = self.file_model.index(parent_path)
+        if parent_model_index.isValid():
+            return self.createIndex(parent_model_index.row(), 0, parent_path)
+
+        return QModelIndex()
 
     def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> QVariant:
         if not index.isValid():
             return QVariant()
-
+        
         path = str(index.internalPointer() or '')
         if not path:
             return QVariant()
-
+        
         if role == Qt.DisplayRole:
             if path in self.root_paths:
                 return self.root_names.get(path, os.path.basename(path))
@@ -289,36 +275,50 @@ class MultiProjectModel(QAbstractItemModel):
         
         return QVariant()
 
-    def get_file_path(self, index: QModelIndex) -> Optional[str]:
-        """Get the full file path for an index"""
-        if not index.isValid():
-            return None
-        return str(index.internalPointer() or '')
-
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        """Return the number of columns for the children of the given parent."""
-        return 1  # We only show one column (the file/folder name)
+        return 1
+
+    def normalize_path(self, path: str) -> str:
+        """Normalize path to handle special characters and brackets"""
+        if not path:
+            return ""
+        return os.path.normpath(os.path.abspath(path))
+
+    def load_projects(self, projects: List[Dict[str, str]]) -> None:
+        """Load projects with improved path handling"""
+        self.beginResetModel()
+        self.root_paths = []
+        self.root_names = {}
+        
+        for project in projects:
+            try:
+                path = self.normalize_path(project['path'])
+                if os.path.exists(path):
+                    self.root_paths.append(path)
+                    self.root_names[path] = project['name']
+                    # Set root path in file model
+                    self.file_model.setRootPath(path)
+            except Exception as e:
+                print(f"Error loading project {project['name']}: {str(e)}")
+        
+        self.endResetModel()
+
+    def filePath(self, index: QModelIndex) -> str:
+        """Get file path from index"""
+        if not index.isValid():
+            return ""
+        return str(index.internalPointer() or "")
 
     def setRootPath(self, path: str) -> QModelIndex:
-        """Compatibility method with QFileSystemModel"""
-        path = os.path.normpath(path)
+        """Set root path and return its index"""
+        path = self.normalize_path(path)
         if path not in self.root_paths:
             self.beginResetModel()
             self.root_paths = [path]
             self.root_names = {path: os.path.basename(path)}
-            self.file_indices = {path: self.file_model.setRootPath(path)}
+            self.file_model.setRootPath(path)
             self.endResetModel()
         return self.createIndex(0, 0, path)
-
-    def rootPath(self) -> str:
-        """Compatibility method with QFileSystemModel"""
-        return self.root_paths[0] if self.root_paths else ""
-
-    def filePath(self, index: QModelIndex) -> str:
-        """Compatibility method with QFileSystemModel"""
-        if not index.isValid():
-            return ""
-        return str(index.internalPointer() or "")
 
 class MarkdownEditor(QMainWindow):
     def __init__(self) -> None:
@@ -635,15 +635,27 @@ class MarkdownEditor(QMainWindow):
 
         # Create file browser
         self.file_browser = QTreeView()
-        self.file_model = MultiProjectModel(self)
+        self.file_system_model = QFileSystemModel()  # Create separate file system model
+        self.file_system_model.setFilter(QDir.AllEntries | QDir.NoDotAndDotDot)
+        self.file_system_model.setNameFilters(['*.md', '*.markdown', '*.prompt'])
+        self.file_system_model.setNameFilterDisables(False)
+        
+        self.project_model = MultiProjectModel(self)  # Rename for clarity
         if self.projects.get("projects"):
-            self.file_model.load_projects(self.projects["projects"])
-        self.file_browser.setModel(self.file_model)
+            self.project_model.load_projects(self.projects["projects"])
+        
+        # Start with project model
+        self.file_browser.setModel(self.project_model)
+        self.current_model = self.project_model  # Track current model
+        
+        self.file_browser.clicked.connect(self.file_selected)
+        self.file_browser.doubleClicked.connect(self.file_selected)
+        self.file_browser.expanded.connect(self.on_tree_expanded)
+        self.file_browser.collapsed.connect(self.on_tree_collapsed)
         self.file_browser.setColumnWidth(0, 200)
         self.file_browser.hideColumn(1)
         self.file_browser.hideColumn(2)
         self.file_browser.hideColumn(3)
-        self.file_browser.clicked.connect(self.file_selected)
         browser_layout.addWidget(self.file_browser)
         self.browser_container.setLayout(browser_layout)
 
@@ -783,24 +795,30 @@ class MarkdownEditor(QMainWindow):
         self.update_project_menu(self.findChild(QToolButton).menu())
 
     def open_project(self, path: str) -> None:
-        """Open a project directory"""
-        if not os.path.exists(path):
-            QMessageBox.warning(self, "Warning", "Project folder no longer exists")
-            return
-        
+        """Open a project directory with improved path handling"""
         try:
-            # Normalize path
-            path = os.path.normpath(path)
+            path = os.path.normpath(os.path.abspath(path))
             
-            # Update the model and get the root index
-            root_index = self.file_model.setRootPath(path)
+            if not os.path.exists(path):
+                QMessageBox.warning(self, "Warning", "Project folder no longer exists")
+                return
+
+            # Switch to file system model for project contents
+            self.file_browser.setModel(self.file_system_model)
+            self.current_model = self.file_system_model
             
-            # Set the root index on the view
+            # Set root path
+            root_index = self.file_system_model.setRootPath(path)
+            if not root_index.isValid():
+                raise Exception("Failed to set root path in model")
+
+            # Set root index in view
             self.file_browser.setRootIndex(root_index)
             
-            # Update the address bar
+            # Update address bar and status
             self.address_bar.setText(path)
             self.show_status_message(f'Opened project: {os.path.basename(path)}')
+            
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not open project: {str(e)}")
 
@@ -813,74 +831,234 @@ class MarkdownEditor(QMainWindow):
                 print(f"Autosave failed: {str(e)}")
 
     def update_preview(self):
-        markdown_text = self.input_text.toPlainText()
-        html_content = markdown2.markdown(
-            markdown_text, 
-            extras=['fenced-code-blocks', 'tables', 'code-friendly']
-        )
-
-        preview_style = FontStyle.PREVIEW_BODY.value
-        code_style = FontStyle.PREVIEW_CODE.value
-        quote_style = FontStyle.PREVIEW_QUOTE.value
-        h1_style = FontStyle.EDITOR_HEADING1.value
+        """Improved markdown preview with better code block handling"""
+        preview_style = FontStyle.PREVIEW_BODY.value  # Define this first for error handling
+        code_style = FontStyle.PREVIEW_CODE.value  # Keep code font separate
+        h1_style = FontStyle.EDITOR_HEADING1.value  # Restore heading styles
         h2_style = FontStyle.EDITOR_HEADING2.value
+        try:
+            markdown_text = self.input_text.toPlainText()
+            
+            # Pre-process code blocks to prevent markdown2 from failing
+            code_block_pattern = r'```(.*?)\n(.*?)```'
+            
+            def code_block_replacer(match):
+                header = match.group(1) or ''
+                code = match.group(2) or ''
+                
+                # Handle empty code blocks
+                if not code.strip():
+                    return '```\n \n```'  # Add a space to prevent parser errors
+                
+                # Process code block content
+                lines = code.split('\n')
+                # Remove empty lines at start and end
+                while lines and not lines[0].strip():
+                    lines.pop(0)
+                while lines and not lines[-1].strip():
+                    lines.pop()
+                
+                if not lines:  # If all lines were empty
+                    return '```\n \n```'
+                
+                # Ensure consistent indentation
+                min_indent = float('inf')
+                for line in lines:
+                    if line.strip():  # Only check non-empty lines
+                        indent = len(line) - len(line.lstrip())
+                        min_indent = min(min_indent, indent)
+                
+                if min_indent == float('inf'):
+                    min_indent = 0
+                
+                # Remove common indentation and ensure at least 4 spaces
+                processed_lines = []
+                for line in lines:
+                    if line.strip():  # Keep empty lines as-is
+                        line = line[min_indent:]
+                    processed_lines.append('    ' + line)
+                
+                # Reconstruct the code block
+                processed_code = '\n'.join(processed_lines)
+                return f'```{header}\n{processed_code}\n```'
+            
+            # Pre-process code blocks
+            processed_text = re.sub(code_block_pattern, code_block_replacer, markdown_text, flags=re.DOTALL)
+            
+            # Convert markdown to HTML with fallback
+            try:
+                html_content = markdown2.markdown(
+                    processed_text,
+                    extras=[
+                        'fenced-code-blocks',
+                        'tables',
+                        'code-friendly',
+                        'break-on-newline',
+                        'cuddled-lists',
+                        'markdown-in-html'
+                    ]
+                )
+            except Exception as md_error:
+                # Fallback to simpler conversion if full conversion fails
+                try:
+                    html_content = markdown2.markdown(
+                        processed_text,
+                        extras=['code-friendly']
+                    )
+                except:
+                    raise Exception(f"Markdown conversion failed: {str(md_error)}")
 
-        full_html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <script type="text/javascript" src="qrc:///qtwebchannel/qwebchannel.js"></script>
-            <style>
-                body {{
-                    font-family: {preview_style['family']};
-                    font-size: {preview_style['size']}pt;
-                    font-weight: {preview_style['weight']};
-                    line-height: 1.6;
-                    padding: 20px;
-                }}
-                pre {{
-                    font-family: {code_style['family']};
-                    font-size: {code_style['size']}pt;
-                    font-weight: {code_style['weight']};
-                    background-color: #f6f8fa;
-                    padding: 16px;
-                    border-radius: 6px;
-                }}
-                code {{
-                    font-family: {code_style['family']};
-                    font-size: {code_style['size']}pt;
-                    font-weight: {code_style['weight']};
-                    background-color: #f6f8fa;
-                    padding: 2px 4px;
-                    border-radius: 3px;
-                }}
-                blockquote {{
-                    font-family: {quote_style['family']};
-                    font-size: {quote_style['size']}pt;
-                    font-weight: {quote_style['weight']};
-                    font-style: italic;
-                    padding: 0 1em;
-                    border-left: 0.25em solid #dfe2e5;
-                }}
-                h1 {{
-                    font-family: {h1_style['family']};
-                    font-size: {h1_style['size']}pt;
-                    font-weight: {h1_style['weight']};
-                }}
-                h2 {{
-                    font-family: {h2_style['family']};
-                    font-size: {h2_style['size']}pt;
-                    font-weight: {h2_style['weight']};
-                }}
-            </style>
-        </head>
-        <body>
-            {html_content}
-        </body>
-        </html>
-        """
-        self.preview_area.setHtml(full_html)
+            # Rest of your existing HTML template code...
+            full_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <script type="text/javascript" src="qrc:///qtwebchannel/qwebchannel.js"></script>
+                <style>
+                    body {{
+                        font-family: {preview_style['family']};
+                        font-size: {preview_style['size']}pt;
+                        font-weight: {preview_style['weight']};
+                        line-height: 1.6;
+                        padding: 20px;
+                        color: #333;
+                        max-width: 900px;
+                        margin: 0 auto;
+                    }}
+                    pre, code {{
+                        font-family: {code_style['family']};
+                        font-size: {code_style['size']}pt;
+                        font-weight: {code_style['weight']};
+                        background-color: #f6f8fa;
+                        border-radius: 3px;
+                    }}
+                    pre {{
+                        padding: 16px;
+                        overflow-x: auto;
+                        white-space: pre-wrap;
+                        word-wrap: break-word;
+                        margin: 1em 0;
+                    }}
+                    code {{
+                        padding: 2px 4px;
+                    }}
+                    h1 {{
+                        font-family: {h1_style['family']};
+                        font-size: {h1_style['size']}pt;
+                        font-weight: {h1_style['weight']};
+                        border-bottom: 2px solid #eaecef;
+                        padding-bottom: 0.3em;
+                        margin-top: 1.5em;
+                        margin-bottom: 1em;
+                        color: #24292e;
+                    }}
+                    h2 {{
+                        font-family: {h2_style['family']};
+                        font-size: {h2_style['size']}pt;
+                        font-weight: {h2_style['weight']};
+                        border-bottom: 1px solid #eaecef;
+                        padding-bottom: 0.3em;
+                        margin-top: 1.5em;
+                        margin-bottom: 1em;
+                        color: #24292e;
+                    }}
+                    h3 {{
+                        font-family: {h2_style['family']};
+                        font-size: {int(h2_style['size'] * 0.8)}pt;
+                        font-weight: {h2_style['weight']};
+                        margin-top: 1.2em;
+                        margin-bottom: 0.8em;
+                        color: #24292e;
+                    }}
+                    h4 {{
+                        font-family: {h2_style['family']};
+                        font-size: {int(h2_style['size'] * 0.7)}pt;
+                        font-weight: {h2_style['weight']};
+                        margin-top: 1.2em;
+                        margin-bottom: 0.8em;
+                        color: #24292e;
+                    }}
+                    blockquote {{
+                        font-family: {preview_style['family']};
+                        font-size: {preview_style['size']}pt;
+                        font-style: italic;
+                        padding: 0 1em;
+                        border-left: 0.25em solid #dfe2e5;
+                        margin: 1em 0;
+                        color: #6a737d;
+                    }}
+                    table {{
+                        border-collapse: collapse;
+                        width: 100%;
+                        margin: 1em 0;
+                    }}
+                    th, td {{
+                        border: 1px solid #dfe2e5;
+                        padding: 6px 13px;
+                    }}
+                    th {{
+                        background-color: #f6f8fa;
+                        font-weight: 600;
+                    }}
+                    tr:nth-child(even) {{
+                        background-color: #f6f8fa;
+                    }}
+                    ul, ol {{
+                        padding-left: 2em;
+                        margin: 1em 0;
+                    }}
+                    li {{
+                        margin: 0.5em 0;
+                    }}
+                    hr {{
+                        height: 2px;
+                        background-color: #e1e4e8;
+                        border: none;
+                        margin: 2em 0;
+                    }}
+                    a {{
+                        color: #0366d6;
+                        text-decoration: none;
+                    }}
+                    a:hover {{
+                        text-decoration: underline;
+                    }}
+                    img {{
+                        max-width: 100%;
+                        height: auto;
+                    }}
+                    .language-diff {{
+                        color: #24292e;
+                    }}
+                    .language-diff .deletion {{
+                        background-color: #ffeef0;
+                        color: #b31d28;
+                    }}
+                    .language-diff .addition {{
+                        background-color: #e6ffed;
+                        color: #22863a;
+                    }}
+                </style>
+            </head>
+            <body>
+                {html_content}
+            </body>
+            </html>
+            """
+            self.preview_area.setHtml(full_html)
+            
+        except Exception as e:
+            error_html = f"""
+            <html>
+            <body style="color: red; font-family: {preview_style['family']};">
+                <h3>Error rendering markdown:</h3>
+                <pre>{str(e)}</pre>
+            </body>
+            </html>
+            """
+            self.preview_area.setHtml(error_html)
+            print(f"Preview error: {str(e)}")
 
     def open_folder(self):
         """Open a folder dialog to select and set the root directory"""
@@ -891,23 +1069,49 @@ class MarkdownEditor(QMainWindow):
             self.show_status_message(f'Opened folder: {folder}')
 
     def file_selected(self, index: QModelIndex) -> None:
-        file_path = self.file_model.get_file_path(index)
-        if not file_path:
-            return
-        
-        # Check if this is a directory
-        if os.path.isdir(file_path):
-            return
-        
-        if file_path.lower().endswith(('.md', '.markdown', '.prompt')):
-            try:
-                with open(file_path, 'r', encoding='utf-8') as file:
-                    content = file.read()
-                    self.input_text.setText(content)
-                    self.current_file = file_path
-                    self.setWindowTitle(f'Modern Markdown Editor - {os.path.basename(file_path)}')
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Could not open file: {str(e)}")
+        """Improved file selection handling"""
+        try:
+            # Get file path based on current model
+            if self.current_model == self.project_model:
+                file_path = self.project_model.filePath(index)
+                if os.path.isdir(file_path):
+                    self.open_project(file_path)
+                    return
+            else:
+                file_path = self.file_system_model.filePath(index)
+
+            if not file_path:
+                return
+
+            if os.path.isdir(file_path):
+                if self.file_browser.isExpanded(index):
+                    self.file_browser.collapse(index)
+                else:
+                    self.file_browser.expand(index)
+                return
+
+            if not file_path.lower().endswith(('.md', '.markdown', '.prompt')):
+                return
+
+            # Try to open the file with different encodings
+            for encoding in ['utf-8', 'utf-8-sig', 'latin1', 'cp1252']:
+                try:
+                    with open(file_path, 'r', encoding=encoding) as file:
+                        content = file.read()
+                        self.input_text.setText(content)
+                        self.current_file = file_path
+                        self.setWindowTitle(f'Modern Markdown Editor - {os.path.basename(file_path)}')
+                        self.show_status_message(f'Opened file: {os.path.basename(file_path)}')
+                        break
+                except UnicodeDecodeError:
+                    continue
+                except Exception as e:
+                    raise Exception(f"Error opening file: {str(e)}")
+            else:
+                raise Exception("Could not decode file with any supported encoding")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
 
     def toggle_file_browser(self):
         self.is_file_browser_visible = not self.is_file_browser_visible
@@ -930,12 +1134,20 @@ class MarkdownEditor(QMainWindow):
             QMessageBox.warning(self, "Warning", "Project folder no longer exists")
 
     def address_bar_navigate(self):
-        path = self.address_bar.text()
-        if os.path.exists(path) and os.path.isdir(path):
-            self.file_browser.setRootIndex(self.file_model.setRootPath(path))
-            self.address_bar.setText(path)
-        else:
-            QMessageBox.warning(self, "Invalid Path", "Please enter a valid folder path.")
+        """Improved address bar navigation with better path handling"""
+        try:
+            path = self.address_bar.text()
+            path = self.file_model.normalize_path(path)
+            
+            if os.path.exists(path) and os.path.isdir(path):
+                root_index = self.file_model.setRootPath(path)
+                self.file_browser.setRootIndex(root_index)
+                self.address_bar.setText(path)
+                self.show_status_message(f'Navigated to: {path}')
+            else:
+                self.show_status_message('Invalid path', 2000)
+        except Exception as e:
+            self.show_status_message(f'Navigation error: {str(e)}', 2000)
 
     def save_file(self):
         if self.current_file and os.path.exists(self.current_file):
@@ -1097,6 +1309,16 @@ class MarkdownEditor(QMainWindow):
                 self.show_status_message(f'Opened {os.path.basename(file_path)}')
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not open file: {str(e)}")
+
+    def on_tree_expanded(self, index):
+        """Handle tree expansion"""
+        path = self.file_model.filePath(index)
+        if path and os.path.isdir(path):
+            self.file_browser.resizeColumnToContents(0)
+
+    def on_tree_collapsed(self, index):
+        """Handle tree collapse"""
+        self.file_browser.resizeColumnToContents(0)
 
 def main():
     # Enable High DPI display
