@@ -1,9 +1,13 @@
 # Lightweight Markdown Preview Editor
 
 ## Latest Build for Windows
-[Download]()
+[Download](.\dist\MarkdownEditor.exe)
 
+## Build the executable for the Markdown Editor
 
+```bash
+build.bat
+```
 
 ## Features
 - Real-time Markdown preview
