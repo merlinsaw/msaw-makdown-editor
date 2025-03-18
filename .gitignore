@@ -16,7 +16,6 @@ test.prompt
 
 # Build and distribution
 build/*
-dist/
 *.spec
 __pycache__/
 *.py[cod]
@@ -25,7 +24,6 @@ __pycache__/
 *.pyd
 *.egg-info/
 *.manifest
-*.exe
 *.app
 
 # Environment and IDE
@@ -63,3 +61,4 @@ htmlcov/
 # Custom ignores
 test.md
 
+dist/windsurf-project - Verknüpfung.lnk
