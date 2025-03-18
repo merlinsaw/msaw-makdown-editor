@@ -62,3 +62,18 @@ htmlcov/
 test.md
 
 dist/windsurf-project - Verknüpfung.lnk
+
+# Build outputs
+dist/
+*.exe
+
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
