@@ -1,7 +1,9 @@
 # Lightweight Markdown Preview Editor
 
 ## Latest Build for Windows
-[Download](.\dist\MarkdownEditor.exe)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/merlinsaw/msaw-makdown-editor)](https://github.com/merlinsaw/msaw-makdown-editor/releases/latest)
+
+🔽 [Download Latest Release](https://github.com/merlinsaw/msaw-makdown-editor/releases/latest)
 
 ## Build the executable for the Markdown Editor
 
